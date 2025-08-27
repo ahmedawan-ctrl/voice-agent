@@ -1,0 +1,32 @@
+{
+  "enabled": true,
+  "name": "Context7 Documentation Helper",
+  "description": "Automatically triggers when agent feels stuck during development, debugging, or editing to fetch relevant documentation and guidance using the context7 MCP",
+  "version": "1",
+  "when": {
+    "type": "fileEdited",
+    "patterns": [
+      "**/*.py",
+      "**/*.js",
+      "**/*.ts",
+      "**/*.jsx",
+      "**/*.tsx",
+      "**/*.rs",
+      "**/*.go",
+      "**/*.java",
+      "**/*.cpp",
+      "**/*.c",
+      "**/*.h",
+      "**/*.md",
+      "**/*.json",
+      "**/*.yaml",
+      "**/*.yml",
+      "**/*.toml",
+      "**/*.cfg",
+      "**/*.ini"
+    ]
+  },
+  "then": {
+    "type": "AgentAutoDetects"
+  }
+}

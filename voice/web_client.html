@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Voice Agent Web Client</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .status {
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+            font-weight: bold;
+        }
+        .status.connected { background-color: #d4edda; color: #155724; }
+        .status.disconnected { background-color: #f8d7da; color: #721c24; }
+        .status.connecting { background-color: #fff3cd; color: #856404; }
+        
+        .controls {
+            display: flex;
+            gap: 10px;
+            margin: 20px 0;
+            flex-wrap: wrap;
+        }
+        button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        .primary { background-color: #007bff; color: white; }
+        .success { background-color: #28a745; color: white; }
+        .danger { background-color: #dc3545; color: white; }
+        .warning { background-color: #ffc107; color: black; }
+        
+        button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        
+        .chat {
+            height: 300px;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+            padding: 10px;
+            margin: 20px 0;
+            background-color: #f9f9f9;
+        }
+        .message {
+            margin: 5px 0;
+            padding: 5px;
+            border-radius: 3px;
+        }
+        .message.sent { background-color: #e3f2fd; text-align: right; }
+        .message.received { background-color: #f1f8e9; }
+        .message.system { background-color: #fff3e0; font-style: italic; }
+        
+        .input-group {
+            display: flex;
+            gap: 10px;
+            margin: 10px 0;
+        }
+        input[type="text"] {
+            flex: 1;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        
+        .audio-controls {
+            text-align: center;
+            margin: 20px 0;
+        }
+        .recording {
+            animation: pulse 1s infinite;
+        }
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎙️ Voice Agent Web Client</h1>
+        
+        <div id="status" class="status disconnected">
+            Disconnected
+        </div>
+        
+        <div class="controls">
+            <button id="connectBtn" class="primary" onclick="connect()">Connect</button>
+            <button id="disconnectBtn" class="danger" onclick="disconnect()" disabled>Disconnect</button>
+        </div>
+        
+        <div class="input-group">
+            <input type="text" id="serverUrl" value="ws://localhost:8765" placeholder="WebSocket URL">
+        </div>
+        
+        <h3>💬 Text Chat</h3>
+        <div id="chat" class="chat"></div>
+        
+        <div class="input-group">
+            <input type="text" id="messageInput" placeholder="Type your message..." onkeypress="handleKeyPress(event)">
+            <button onclick="sendMessage()" class="success">Send</button>
+        </div>
+        
+        <h3>🎤 Audio Controls</h3>
+        <div class="audio-controls">
+            <button id="recordBtn" class="warning" onclick="toggleRecording()" disabled>Start Recording</button>
+            <button id="playTestBtn" class="primary" onclick="playTestSound()" disabled>Play Test Sound</button>
+        </div>
+        
+        <div id="audioStatus" class="message system">
+            Audio not initialized
+        </div>
+    </div>
+
+    <script>
+        let ws = null;
+        let isRecording = false;
+        let mediaRecorder = null;
+        let audioChunks = [];
+        let audioContext = null;
+        
+        function updateStatus(message, className) {
+            const status = document.getElementById('status');
+            status.textContent = message;
+            status.className = `status ${className}`;
+        }
+        
+        function addMessage(message, type = 'system') {
+            const chat = document.getElementById('chat');
+            const div = document.createElement('div');
+            div.className = `message ${type}`;
+            div.textContent = `${new Date().toLocaleTimeString()}: ${message}`;
+            chat.appendChild(div);
+            chat.scrollTop = chat.scrollHeight;
+        }
+        
+        async function connect() {
+            const url = document.getElementById('serverUrl').value;
+            updateStatus('Connecting...', 'connecting');
+            
+            try {
+                ws = new WebSocket(url);
+                
+                ws.onopen = function() {
+                    updateStatus('Connected', 'connected');
+                    document.getElementById('connectBtn').disabled = true;
+                    document.getElementById('disconnectBtn').disabled = false;
+                    document.getElementById('recordBtn').disabled = false;
+                    document.getElementById('playTestBtn').disabled = false;
+                    addMessage('Connected to voice agent', 'system');
+                    initializeAudio();
+                };
+                
+                ws.onmessage = function(event) {
+                    try {
+                        const data = JSON.parse(event.data);
+                        handleMessage(data);
+                    } catch (e) {
+                        addMessage(`Received: ${event.data}`, 'received');
+                    }
+                };
+                
+                ws.onclose = function() {
+                    updateStatus('Disconnected', 'disconnected');
+                    document.getElementById('connectBtn').disabled = false;
+                    document.getElementById('disconnectBtn').disabled = true;
+                    document.getElementById('recordBtn').disabled = true;
+                    document.getElementById('playTestBtn').disabled = true;
+                    addMessage('Disconnected from voice agent', 'system');
+                };
+                
+                ws.onerror = function(error) {
+                    updateStatus('Connection Error', 'disconnected');
+                    addMessage(`Connection error: ${error}`, 'system');
+                };
+                
+            } catch (error) {
+                updateStatus('Connection Failed', 'disconnected');
+                addMessage(`Failed to connect: ${error}`, 'system');
+            }
+        }
+        
+        function disconnect() {
+            if (ws) {
+                ws.close();
+                ws = null;
+            }
+        }
+        
+        function handleMessage(data) {
+            const type = data.type || 'unknown';
+            
+            switch (type) {
+                case 'text':
+                    addMessage(data.data, 'received');
+                    break;
+                case 'audio':
+                    addMessage('Received audio response', 'received');
+                    playAudioData(data.data);
+                    break;
+                case 'status':
+                    addMessage(`Status: ${data.status} - ${JSON.stringify(data.details || {})}`, 'system');
+                    break;
+                default:
+                    addMessage(`Unknown message type: ${JSON.stringify(data)}`, 'system');
+            }
+        }
+        
+        function sendMessage() {
+            const input = document.getElementById('messageInput');
+            const message = input.value.trim();
+            
+            if (message && ws && ws.readyState === WebSocket.OPEN) {
+                const data = {
+                    type: 'text',
+                    data: message
+                };
+                
+                ws.send(JSON.stringify(data));
+                addMessage(message, 'sent');
+                input.value = '';
+            }
+        }
+        
+        function handleKeyPress(event) {
+            if (event.key === 'Enter') {
+                sendMessage();
+            }
+        }
+        
+        async function initializeAudio() {
+            try {
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    audio: {
+                        sampleRate: 16000,
+                        channelCount: 1,
+                        echoCancellation: true,
+                        noiseSuppression: true
+                    } 
+                });
+                
+                mediaRecorder = new MediaRecorder(stream, {
+                    mimeType: 'audio/webm;codecs=opus'
+                });
+                
+                mediaRecorder.ondataavailable = function(event) {
+                    if (event.data.size > 0) {
+                        audioChunks.push(event.data);
+                    }
+                };
+                
+                mediaRecorder.onstop = function() {
+                    const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+                    audioChunks = [];
+                    sendAudioData(audioBlob);
+                };
+                
+                document.getElementById('audioStatus').textContent = 'Audio initialized and ready';
+                
+            } catch (error) {
+                document.getElementById('audioStatus').textContent = `Audio error: ${error.message}`;
+                addMessage(`Audio initialization failed: ${error.message}`, 'system');
+            }
+        }
+        
+        function toggleRecording() {
+            const btn = document.getElementById('recordBtn');
+            
+            if (!isRecording) {
+                // Start recording
+                if (mediaRecorder && mediaRecorder.state === 'inactive') {
+                    mediaRecorder.start(1000); // Collect data every second
+                    isRecording = true;
+                    btn.textContent = 'Stop Recording';
+                    btn.className = 'danger recording';
+                    addMessage('Started recording...', 'system');
+                }
+            } else {
+                // Stop recording
+                if (mediaRecorder && mediaRecorder.state === 'recording') {
+                    mediaRecorder.stop();
+                    isRecording = false;
+                    btn.textContent = 'Start Recording';
+                    btn.className = 'warning';
+                    addMessage('Stopped recording', 'system');
+                }
+            }
+        }
+        
+        async function sendAudioData(audioBlob) {
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                addMessage('Cannot send audio: not connected', 'system');
+                return;
+            }
+            
+            try {
+                // Convert blob to array buffer
+                const arrayBuffer = await audioBlob.arrayBuffer();
+                const uint8Array = new Uint8Array(arrayBuffer);
+                
+                // Convert to hex string for JSON transmission
+                const hexString = Array.from(uint8Array)
+                    .map(b => b.toString(16).padStart(2, '0'))
+                    .join('');
+                
+                const data = {
+                    type: 'audio',
+                    data: hexString,
+                    sample_rate: 16000,
+                    channels: 1,
+                    format: 'webm'
+                };
+                
+                ws.send(JSON.stringify(data));
+                addMessage(`Sent audio: ${audioBlob.size} bytes`, 'sent');
+                
+            } catch (error) {
+                addMessage(`Error sending audio: ${error.message}`, 'system');
+            }
+        }
+        
+        async function playAudioData(hexData) {
+            try {
+                // Convert hex string back to bytes
+                const bytes = new Uint8Array(
+                    hexData.match(/.{1,2}/g).map(byte => parseInt(byte, 16))
+                );
+                
+                // Create audio blob and play
+                const audioBlob = new Blob([bytes], { type: 'audio/wav' });
+                const audioUrl = URL.createObjectURL(audioBlob);
+                const audio = new Audio(audioUrl);
+                
+                audio.play().catch(e => {
+                    addMessage(`Error playing audio: ${e.message}`, 'system');
+                });
+                
+                // Clean up URL after playing
+                audio.onended = () => URL.revokeObjectURL(audioUrl);
+                
+            } catch (error) {
+                addMessage(`Error processing audio: ${error.message}`, 'system');
+            }
+        }
+        
+        function playTestSound() {
+            // Generate a simple test tone
+            if (!audioContext) {
+                addMessage('Audio context not initialized', 'system');
+                return;
+            }
+            
+            const oscillator = audioContext.createOscillator();
+            const gainNode = audioContext.createGain();
+            
+            oscillator.connect(gainNode);
+            gainNode.connect(audioContext.destination);
+            
+            oscillator.frequency.setValueAtTime(440, audioContext.currentTime); // A4 note
+            gainNode.gain.setValueAtTime(0.1, audioContext.currentTime);
+            gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.5);
+            
+            oscillator.start(audioContext.currentTime);
+            oscillator.stop(audioContext.currentTime + 0.5);
+            
+            addMessage('Played test sound', 'system');
+        }
+        
+        // Initialize on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            addMessage('Web client loaded. Click Connect to start.', 'system');
+        });
+    </script>
+</body>
+</html>
